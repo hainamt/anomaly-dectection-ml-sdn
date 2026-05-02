@@ -40,3 +40,4 @@ sudo ./CICTrigger.sh
 5. If a source IP address is determined to be anomalous, the application will response with some actions in ManipAPI.Reaction. In this python file, 2 actions can be performed to indirectly modify flow entry of OpenFlow Switch by REST API (depending on the application running with the Controller):
  - Interact with rest_firewall
  - Interact with ofctl_rest
+a
