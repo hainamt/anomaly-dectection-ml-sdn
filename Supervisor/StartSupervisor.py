@@ -76,7 +76,7 @@ def initiateSpvs():
         #print("Reading flow...")
         for i in range(len(df)):
             ip_src = str(df.iloc[i,1])
-            if DB.db["Topology"].count_documents({"Hosts.IP": ip_src}) == 0:
+            if DB.DBconfig_query(ip_src)[0] is None:
                 log.info("Ignored flow from unknown IP: " + ip_src)
                 continue
             if idsapp.predict(df.iloc[[i]])[0] == PredictLabels.ANOMALY.value:

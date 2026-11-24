@@ -93,13 +93,12 @@ class RESTDBconfig(object):
         self.db[collection_name].update_one({"Hosts.IP": ip_src}, {'$inc':{"Hosts.$.Status": increase}})
 
     def DBconfig_query(self, ip_src, collection_name=CollName):
-        self.db[collection_name].find({})
-        query = list(self.db[collection_name].find({ 'Hosts' : { '$elemMatch': { 'IP': ip_src } } }, {'_id': False, 'Version': False}))
-        for host in query[0]['Hosts']:
-            if host['IP'] == ip_src:
-                stt = host['Status']
-        dp = query[0]['Datapath ID']
-        return dp, stt
+        """Return (datapath id, status) of the switch the host is attached to, or (None, None)."""
+        switch = self.db[collection_name].find_one({'Hosts.IP': ip_src}, {'_id': False, 'Version': False})
+        if switch is None:
+            return None, None
+        stt = next(host['Status'] for host in switch['Hosts'] if host['IP'] == ip_src)
+        return switch['Datapath ID'], stt
 
     def DBConfig_del(self, datapathid,collection_name=CollName):
-        self.db[collection_name].delete_one({'$elemMatch' : {'DatapathID':datapathid}})
+        self.db[collection_name].delete_one({'Datapath ID': datapathid})
