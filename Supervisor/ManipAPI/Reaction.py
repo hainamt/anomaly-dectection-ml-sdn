@@ -41,6 +41,11 @@ class RESTOFconfig(object):
         self.flow_url = of_url + "flow/"
         self.port_url = of_url + "port/"
         self.flowentry_url = of_url + "flowentry/"
+        self.switches_url = of_url + "switches"
+
+    def check_connection(self, timeout=3):
+        """Raise if the controller's REST API (ofctl_rest) does not answer."""
+        rq.get(self.switches_url, timeout=timeout).raise_for_status()
 
     def get_sw_stt(self, datapathid):
         rq_sw_stt = rq.get(self.desc_url+str(datapathid))
@@ -76,7 +81,9 @@ class RESTDBconfig(object):
     Initiate connection with MongoDB and perform some actions
     """
     def __init__(self, db_url=MONGO_URL,db_name=DBName):
-        self.db = MongoClient(db_url)[db_name]
+        client = MongoClient(db_url, serverSelectionTimeoutMS=3000)
+        client.admin.command('ping')  # MongoClient connects lazily; fail here if MongoDB is down
+        self.db = client[db_name]
 
     def DBconfig_update(self,datapathid,data,collection_name=CollName):
             filter = {'Datapath ID' : datapathid}
@@ -85,14 +92,21 @@ class RESTDBconfig(object):
     def DBconfig_update_status(self, ip_src, increase=5, collection_name=CollName):
         self.db[collection_name].update_one({"Hosts.IP": ip_src}, {'$inc':{"Hosts.$.Status": increase}})
 
+    def DBconfig_decrease_status(self, ip_src, decrease, collection_name=CollName):
+        """Lower a host's status by `decrease`, without going below 0."""
+        coll = self.db[collection_name]
+        result = coll.update_one({'Hosts': {'$elemMatch': {'IP': ip_src, 'Status': {'$gte': decrease}}}},
+                                 {'$inc': {'Hosts.$.Status': -decrease}})
+        if result.matched_count == 0:
+            coll.update_one({'Hosts.IP': ip_src}, {'$set': {'Hosts.$.Status': 0}})
+
     def DBconfig_query(self, ip_src, collection_name=CollName):
-        self.db[collection_name].find({})
-        query = list(self.db[collection_name].find({ 'Hosts' : { '$elemMatch': { 'IP': ip_src } } }, {'_id': False, 'Version': False}))
-        for host in query[0]['Hosts']:
-            if host['IP'] == ip_src:
-                stt = host['Status']
-        dp = query[0]['Datapath ID']
-        return dp, stt
+        """Return (datapath id, status) of the switch the host is attached to, or (None, None)."""
+        switch = self.db[collection_name].find_one({'Hosts.IP': ip_src}, {'_id': False, 'Version': False})
+        if switch is None:
+            return None, None
+        stt = next(host['Status'] for host in switch['Hosts'] if host['IP'] == ip_src)
+        return switch['Datapath ID'], stt
 
     def DBConfig_del(self, datapathid,collection_name=CollName):
-        self.db[collection_name].delete_one({'$elemMatch' : {'DatapathID':datapathid}})
+        self.db[collection_name].delete_one({'Datapath ID': datapathid})

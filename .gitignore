@@ -1,0 +1,10 @@
+# Python
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+
+# Runtime output (captures, converted flows, logs)
+Captures/
+logs/
+Topology/CICFlowMeter-4.0/bin/logs/

@@ -1,3 +1,4 @@
+import sys
 import time
 import os
 import logging
@@ -12,13 +13,21 @@ from ManipAPI.Reaction import RESTDBconfig, RESTFWconfig, RESTOFconfig
 from MLinitiater.mlinitiater import MLInitiater
 from Datapipeline.DataPreprocessor import AttributesRemover, Standardizer, CustomCleaner, PipelineLoader, TransformerMixin, BaseEstimator
 
-CSVFILEPATH = ''
-DATA_PIPELINE_FILEPATH = ''
-MODEL_FILEPATH = ''
-csvfilename= ''
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+CSVFILEPATH = os.path.join(BASE_DIR, 'Captures', 'CSV')
+DATA_PIPELINE_FILEPATH = os.path.join(BASE_DIR, 'Supervisor', 'Datapipeline', 'pipeline_data_last.joblib')
+MODEL_FILEPATH = os.path.join(BASE_DIR, 'Models', 'cls_bag_rf_colab.pkl')
+CSV_PATTERN = 'Flow_*.pcap_Flow.csv'
+POLL_SECONDS = 1
+
+# Reaction to anomalies: each anomalous flow adds ANOMALY_SCORE to the source's status,
+# which decays by SCORE_DECAY_PER_MINUTE while no anomalies arrive. At BLOCK_THRESHOLD the
+# source is blocked on its switch for BLOCK_SECONDS.
+ANOMALY_SCORE = 30
+SCORE_DECAY_PER_MINUTE = 10
+BLOCK_THRESHOLD = 100
+BLOCK_SECONDS = 1800
 columns = features.attrs
-fileindex = 1
-undetected = 1
 
 # create logger with 'spam_application'
 log = logging.getLogger("Supervisor")
@@ -39,49 +48,63 @@ def initiateSpvs():
         DB = RESTDBconfig()
         log.info('Connected to the database')
     except Exception as ex:
-        log.error('Cannot connect to the database',exc_info=True)
+        log.error('Cannot connect to the database (is mongod running?): %s', ex)
+        sys.exit(1)
     try:
         OF = RESTOFconfig()
+        OF.check_connection()
         log.info('Ready to manipulate with OpenFlow')
     except Exception as ex:
-        log.error('Cannot manipulate with OpenFlow', exc_info=True)
-
-    global csvfilename
-    global fileindex
-    global undetected
+        log.error('Cannot reach the controller REST API (is ryu-manager running with ofctl_rest.py?): %s', ex)
+        sys.exit(1)
 
     idsapp = MLInitiater(MODEL_FILEPATH, DATA_PIPELINE_FILEPATH)
 
+    processed = set()
+    last_anomaly = {}   # ip -> time of its last anomaly, for the score decay
+    blocked_until = {}  # ip -> time its block rule expires
     while True:
-        undetected = 1
-        #print("Finding the "+ str(fileindex) + "th flow subset...")
-        while undetected:
-            file_pointer = "Flow_" + f"{fileindex:05d}" + "*" + ".pcap_Flow.csv"
-            files = glob.glob(os.path.join(CSVFILEPATH, file_pointer))
-            if len(files) != 0:
-                undetected = 0
-                #print("Flow subset %sth - %s has been detected!" % (fileindex, files[0]))
-                time.sleep(3)
+        new_files = set(glob.glob(os.path.join(CSVFILEPATH, CSV_PATTERN))) - processed
+        if not new_files:
+            time.sleep(POLL_SECONDS)
+            continue
+        time.sleep(3)  # give CICFlowMeter time to finish writing the CSV
 
-        df = pd.read_csv(str(files[0]))
-        fileindex += 1
-        if(len(df)==0):
-            #print('Empty')
-            continue        
-        #print("Reading flow...")
-        for i in range(len(df)):
-            ip_src = str(df.iloc[i,1])
-            if idsapp.predict(df.iloc[[i]])[0] == PredictLabels.ANOMALY.value:
-                DB.DBconfig_update_status(ip_src,increase=30)
-                dp, stt = DB.DBconfig_query(ip_src)
-                log.warning("ANOMALY DETECTED FROM: " + ip_src + " attached with Switch ID: " + str(dp))
-                log.warning('Emergency level: ' + str(stt))
-                if stt >= 100:
-                    try:
-                        OF.block_entry(dp, ip_src)
-                        log.info("Source " + ip_src + " has been blocked for 30 minutes, entry priority: 11111" ) 
-                    except Exception as ex:
-                        log.error('Error occurred when adding flow entry', exc_info=True)
-                    
+        for csv_file in sorted(new_files, key=os.path.getmtime):
+            processed.add(csv_file)
+            df = pd.read_csv(csv_file)
+            if len(df) == 0:
+                continue
+            predictions = idsapp.predict(df)
+            for i in range(len(df)):
+                ip_src = str(df.iloc[i,1])
+                if DB.DBconfig_query(ip_src)[0] is None:
+                    log.info("Ignored flow from unknown IP: " + ip_src)
+                    continue
+                if df.index[i] not in predictions.index:
+                    log.info("Ignored flow with NaN or infinite features: " + ip_src + " -> " + str(df.iloc[i,3]))
+                    continue
+                if predictions[df.index[i]] == PredictLabels.ANOMALY.value:
+                    now = time.time()
+                    decay = int((now - last_anomaly.get(ip_src, now)) / 60 * SCORE_DECAY_PER_MINUTE)
+                    if decay > 0:
+                        DB.DBconfig_decrease_status(ip_src, decay)
+                    last_anomaly[ip_src] = now
+                    DB.DBconfig_update_status(ip_src, increase=ANOMALY_SCORE)
+                    dp, stt = DB.DBconfig_query(ip_src)
+                    log.warning("ANOMALY DETECTED FROM: " + ip_src + " attached with Switch ID: " + str(dp))
+                    log.warning('Emergency level: ' + str(stt))
+                    if stt >= BLOCK_THRESHOLD and now < blocked_until.get(ip_src, 0):
+                        log.info("Source " + ip_src + " is already blocked")
+                    elif stt >= BLOCK_THRESHOLD:
+                        try:
+                            OF.block_entry(dp, ip_src, time=BLOCK_SECONDS)
+                            blocked_until[ip_src] = now + BLOCK_SECONDS
+                            log.info("Source %s has been blocked for %d minutes, entry priority: 11111", ip_src, BLOCK_SECONDS // 60)
+                        except Exception as ex:
+                            log.error('Error occurred when adding flow entry', exc_info=True)
+                else:
+                    log.info("Normal flow: " + ip_src + " -> " + str(df.iloc[i,3]))
+
 if __name__ == "__main__":
     initiateSpvs()
