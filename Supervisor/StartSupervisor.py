@@ -12,9 +12,10 @@ from ManipAPI.Reaction import RESTDBconfig, RESTFWconfig, RESTOFconfig
 from MLinitiater.mlinitiater import MLInitiater
 from Datapipeline.DataPreprocessor import AttributesRemover, Standardizer, CustomCleaner, PipelineLoader, TransformerMixin, BaseEstimator
 
-CSVFILEPATH = ''
-DATA_PIPELINE_FILEPATH = ''
-MODEL_FILEPATH = ''
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+CSVFILEPATH = os.path.join(BASE_DIR, 'Captures', 'CSV')
+DATA_PIPELINE_FILEPATH = os.path.join(BASE_DIR, 'Supervisor', 'Datapipeline', 'pipeline_data_last.joblib')
+MODEL_FILEPATH = os.path.join(BASE_DIR, 'Models', 'cls_bag_rf_colab.pkl')
 csvfilename= ''
 columns = features.attrs
 fileindex = 1
