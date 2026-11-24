@@ -65,12 +65,16 @@ def initiateSpvs():
             df = pd.read_csv(csv_file)
             if len(df) == 0:
                 continue
+            predictions = idsapp.predict(df)
             for i in range(len(df)):
                 ip_src = str(df.iloc[i,1])
                 if DB.DBconfig_query(ip_src)[0] is None:
                     log.info("Ignored flow from unknown IP: " + ip_src)
                     continue
-                if idsapp.predict(df.iloc[[i]])[0] == PredictLabels.ANOMALY.value:
+                if df.index[i] not in predictions.index:
+                    log.info("Ignored flow with NaN or infinite features: " + ip_src + " -> " + str(df.iloc[i,3]))
+                    continue
+                if predictions[df.index[i]] == PredictLabels.ANOMALY.value:
                     DB.DBconfig_update_status(ip_src,increase=30)
                     dp, stt = DB.DBconfig_query(ip_src)
                     log.warning("ANOMALY DETECTED FROM: " + ip_src + " attached with Switch ID: " + str(dp))
