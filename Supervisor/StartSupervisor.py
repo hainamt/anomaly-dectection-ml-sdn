@@ -72,6 +72,9 @@ def initiateSpvs():
         #print("Reading flow...")
         for i in range(len(df)):
             ip_src = str(df.iloc[i,1])
+            if DB.db["Topology"].count_documents({"Hosts.IP": ip_src}) == 0:
+                log.info("Ignored flow from unknown IP: " + ip_src)
+                continue
             if idsapp.predict(df.iloc[[i]])[0] == PredictLabels.ANOMALY.value:
                 DB.DBconfig_update_status(ip_src,increase=30)
                 dp, stt = DB.DBconfig_query(ip_src)
@@ -83,6 +86,8 @@ def initiateSpvs():
                         log.info("Source " + ip_src + " has been blocked for 30 minutes, entry priority: 11111" ) 
                     except Exception as ex:
                         log.error('Error occurred when adding flow entry', exc_info=True)
+            else:
+                log.info("Normal flow: " + ip_src + " -> " + str(df.iloc[i,3]))
                     
 if __name__ == "__main__":
     initiateSpvs()
