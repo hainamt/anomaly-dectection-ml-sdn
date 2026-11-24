@@ -89,6 +89,24 @@ class RESTDBconfig(object):
             filter = {'Datapath ID' : datapathid}
             self.db[collection_name].update_one(filter, data, upsert=True)
 
+    def DBconfig_sync_hosts(self, datapathid, host_ips, version, collection_name=CollName):
+        """Add the switch's new hosts with Status 0, keeping the Status of hosts already listed.
+
+        Hosts missing from host_ips are kept: after a controller restart Ryu only knows
+        the hosts that have sent traffic since, and a blocked host never reaches it. A
+        host is removed from a switch only when it shows up on another one. Each step
+        is a single atomic update, so it never overwrites a Status the Supervisor is
+        changing at the same time.
+        """
+        coll = self.db[collection_name]
+        coll.update_one({'Datapath ID': datapathid}, {'$set': {'Version': version}}, upsert=True)
+        for ip in host_ips:
+            added = coll.update_one({'Datapath ID': datapathid, 'Hosts.IP': {'$ne': ip}},
+                                    {'$push': {'Hosts': {'IP': ip, 'Status': 0}}})
+            if added.modified_count:
+                # A host that moved is listed only under its new switch
+                coll.update_many({'Datapath ID': {'$ne': datapathid}}, {'$pull': {'Hosts': {'IP': ip}}})
+
     def DBconfig_update_status(self, ip_src, increase=5, collection_name=CollName):
         self.db[collection_name].update_one({"Hosts.IP": ip_src}, {'$inc':{"Hosts.$.Status": increase}})
 

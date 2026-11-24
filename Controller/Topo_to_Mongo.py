@@ -1,10 +1,11 @@
 import os
 import sys
+from datetime import datetime
 
 # Reaction.py lives in Supervisor/ManipAPI and is shared with the Supervisor
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'Supervisor', 'ManipAPI'))
 from Reaction import RESTDBconfig
-from datetime import datetime
+
 from ryu.app import simple_switch_13
 from ryu.controller import ofp_event
 from ryu.controller.handler import MAIN_DISPATCHER, DEAD_DISPATCHER
@@ -12,25 +13,26 @@ from ryu.controller.handler import set_ev_cls
 from ryu.lib import hub
 from ryu.topology.api import get_host
 
-FIREWALL_URL = ''
-MONGO_URL = 'mongodb://127.0.0.1:27017/'
-OF_URL = 'http://localhost:8080/stats/flowentry/add'
-DBName = 'SDN'
-CollName = 'Topology'
+SYNC_SECONDS = 15
+
 
 class ControlTopo13(simple_switch_13.SimpleSwitch13):
+    """L2 switch that keeps MongoDB's Topology collection in sync with the hosts Ryu discovers.
+
+    Each document is {'Datapath ID': dpid, 'Hosts': [{'IP': ip, 'Status': score}], 'Version': timestamp}.
+    The Supervisor reads it to map a source IP to its switch and keeps the Status score.
+    """
 
     def __init__(self, *args, **kwargs):
         super(ControlTopo13, self).__init__(*args, **kwargs)
         self.datapaths = {}
-        self.monitor_thread = hub.spawn(self._monitor)
-        self.topo_app = self
-        self.device_count = 0
         try:
             self.DB = RESTDBconfig()
             self.logger.info('Connected to Database.')
         except Exception:
-            self.logger.error('Cannot connect to the Database',exc_info=True)
+            self.DB = None
+            self.logger.error('Cannot connect to the Database', exc_info=True)
+        self.monitor_thread = hub.spawn(self._monitor)
 
     @set_ev_cls(ofp_event.EventOFPStateChange,
                 [MAIN_DISPATCHER, DEAD_DISPATCHER])
@@ -47,59 +49,20 @@ class ControlTopo13(simple_switch_13.SimpleSwitch13):
 
     def _monitor(self):
         while True:
-            for dp in self.datapaths.values():
-                self._request_stats(dp)
-            hub.sleep(15)
-            if self.device_count == len(self.datapaths.values()):
-                self.device_count = 0
-                hub.sleep(3600)
+            hub.sleep(SYNC_SECONDS)
+            if self.DB is None:
+                continue
+            for dpid in list(self.datapaths):
+                self._sync_hosts(dpid)
 
-    def _request_stats(self, datapath):
-        self.logger.debug('send stats request: %016x', datapath.id)
-        ofproto = datapath.ofproto
-        parser = datapath.ofproto_parser
+    def _get_hosts(self, dpid):
+        """IPv4 addresses of the hosts Ryu has seen attached to this switch."""
+        return [ip for host in get_host(self, dpid=dpid) for ip in host.ipv4]
 
-        req = parser.OFPFlowStatsRequest(datapath)
-        datapath.send_msg(req)
-
-    def _to_database(self,datapathid,data, collection=CollName):
+    def _sync_hosts(self, dpid):
         try:
-            self.logger.info('Inserting data to Database...')
-            self.DB.DBconfig_update(datapathid,data,collection)
-            self.logger.info('Database is updated!')
+            hosts = self._get_hosts(dpid)
+            self.DB.DBconfig_sync_hosts(dpid, hosts, datetime.now().strftime("%Y%m%d%H%M%S"))
+            self.logger.debug('Switch %d hosts in database: %s', dpid, hosts)
         except Exception:
-            self.logger.error('Cannot insert data to the database', exc_info=True)
-
-    def _get_hosts(self, ev_datapathid):
-        
-        dp = ev_datapathid
-
-        try:
-            hosts_list = get_host(self.topo_app, dpid=dp)
-            host_ipv4 = [host.ipv4 for host in hosts_list]
-            flattenize = [host for sublist in host_ipv4 for host in sublist]
-        except Exception as ex:
-            self.logger.error(ex)
-        return flattenize 
-
-    @set_ev_cls(ofp_event.EventOFPFlowStatsReply, MAIN_DISPATCHER)
-    def _flow_stats_reply_handler(self, ev):
-        switchs_hosts = {}
-        host_all = []
-        dp = ev.msg.datapath.id
-
-        switchs_hosts['Datapath ID'] = dp
-        hosts = self._get_hosts(dp)
-        for host in hosts:
-            dict_host = {}
-            dict_host['IP'] = host
-            dict_host['Status'] = 0
-            host_all.append(dict_host)
-        switchs_hosts['Hosts'] = host_all
-        switchs_hosts['Version'] = datetime.now().strftime("%Y%m%d%H%M%S")
-        
-        self.device_count += 1
-        #buff_info = self.device_info
-        data = { "$set": switchs_hosts } 
-        self._to_database(dp, data, CollName)
-
+            self.logger.error('Cannot update the hosts of switch %d in the database', dpid, exc_info=True)
