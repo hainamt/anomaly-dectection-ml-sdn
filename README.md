@@ -57,6 +57,10 @@ cd Supervisor && python StartSupervisor.py
 
 Alternatively, `Topology/Script PCAP to CSV/TsharkCIC.py` captures with pyshark and calls CICFlowMeter itself, replacing steps 3 and 4.
 
+### Known limitations
+- **Short ICMP exchanges look like attacks to the model.** Mininet's `pingall` sends one ping per pair of hosts, so its flows have 1–2 packets per direction. In an end-to-end test, 13 of its 14 flows were flagged as anomalies and h02 was blocked; pings of several packets (`ping -c 3` and up) were classified normal. Don't run `pingall` while the Supervisor is running. Retraining the model would fix this, but the training data and notebook are not in the repo.
+- **Blocks arrive after the capture window.** A capture is converted and classified when its 30 s window closes, so the block comes 30–60 s after an attack starts. A 3 s hping3 attack was over before its block rule was installed. Shorter windows (`-b duration:10`) reduce the delay at the cost of more files.
+
 ## How it works
 > ⚠️ **WARNING**: **This is a bad pipeline, it should be optimized with a message queuing system like Kafka**
 1. The pcap files will be saved with the format "Flow_{index}_{year}{month}{date}{hour}{minute}{second}.pcap"
