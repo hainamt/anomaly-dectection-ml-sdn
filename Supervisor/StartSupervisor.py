@@ -1,3 +1,4 @@
+import sys
 import time
 import os
 import logging
@@ -40,12 +41,15 @@ def initiateSpvs():
         DB = RESTDBconfig()
         log.info('Connected to the database')
     except Exception as ex:
-        log.error('Cannot connect to the database',exc_info=True)
+        log.error('Cannot connect to the database (is mongod running?): %s', ex)
+        sys.exit(1)
     try:
         OF = RESTOFconfig()
+        OF.check_connection()
         log.info('Ready to manipulate with OpenFlow')
     except Exception as ex:
-        log.error('Cannot manipulate with OpenFlow', exc_info=True)
+        log.error('Cannot reach the controller REST API (is ryu-manager running with ofctl_rest.py?): %s', ex)
+        sys.exit(1)
 
     global csvfilename
     global fileindex

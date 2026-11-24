@@ -41,6 +41,11 @@ class RESTOFconfig(object):
         self.flow_url = of_url + "flow/"
         self.port_url = of_url + "port/"
         self.flowentry_url = of_url + "flowentry/"
+        self.switches_url = of_url + "switches"
+
+    def check_connection(self, timeout=3):
+        """Raise if the controller's REST API (ofctl_rest) does not answer."""
+        rq.get(self.switches_url, timeout=timeout).raise_for_status()
 
     def get_sw_stt(self, datapathid):
         rq_sw_stt = rq.get(self.desc_url+str(datapathid))
@@ -76,7 +81,9 @@ class RESTDBconfig(object):
     Initiate connection with MongoDB and perform some actions
     """
     def __init__(self, db_url=MONGO_URL,db_name=DBName):
-        self.db = MongoClient(db_url)[db_name]
+        client = MongoClient(db_url, serverSelectionTimeoutMS=3000)
+        client.admin.command('ping')  # MongoClient connects lazily; fail here if MongoDB is down
+        self.db = client[db_name]
 
     def DBconfig_update(self,datapathid,data,collection_name=CollName):
             filter = {'Datapath ID' : datapathid}
