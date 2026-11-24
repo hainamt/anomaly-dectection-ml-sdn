@@ -92,6 +92,14 @@ class RESTDBconfig(object):
     def DBconfig_update_status(self, ip_src, increase=5, collection_name=CollName):
         self.db[collection_name].update_one({"Hosts.IP": ip_src}, {'$inc':{"Hosts.$.Status": increase}})
 
+    def DBconfig_decrease_status(self, ip_src, decrease, collection_name=CollName):
+        """Lower a host's status by `decrease`, without going below 0."""
+        coll = self.db[collection_name]
+        result = coll.update_one({'Hosts': {'$elemMatch': {'IP': ip_src, 'Status': {'$gte': decrease}}}},
+                                 {'$inc': {'Hosts.$.Status': -decrease}})
+        if result.matched_count == 0:
+            coll.update_one({'Hosts.IP': ip_src}, {'$set': {'Hosts.$.Status': 0}})
+
     def DBconfig_query(self, ip_src, collection_name=CollName):
         """Return (datapath id, status) of the switch the host is attached to, or (None, None)."""
         switch = self.db[collection_name].find_one({'Hosts.IP': ip_src}, {'_id': False, 'Version': False})

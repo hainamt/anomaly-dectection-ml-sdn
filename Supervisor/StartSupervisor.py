@@ -19,6 +19,14 @@ DATA_PIPELINE_FILEPATH = os.path.join(BASE_DIR, 'Supervisor', 'Datapipeline', 'p
 MODEL_FILEPATH = os.path.join(BASE_DIR, 'Models', 'cls_bag_rf_colab.pkl')
 CSV_PATTERN = 'Flow_*.pcap_Flow.csv'
 POLL_SECONDS = 1
+
+# Reaction to anomalies: each anomalous flow adds ANOMALY_SCORE to the source's status,
+# which decays by SCORE_DECAY_PER_MINUTE while no anomalies arrive. At BLOCK_THRESHOLD the
+# source is blocked on its switch for BLOCK_SECONDS.
+ANOMALY_SCORE = 30
+SCORE_DECAY_PER_MINUTE = 10
+BLOCK_THRESHOLD = 100
+BLOCK_SECONDS = 1800
 columns = features.attrs
 
 # create logger with 'spam_application'
@@ -53,6 +61,8 @@ def initiateSpvs():
     idsapp = MLInitiater(MODEL_FILEPATH, DATA_PIPELINE_FILEPATH)
 
     processed = set()
+    last_anomaly = {}   # ip -> time of its last anomaly, for the score decay
+    blocked_until = {}  # ip -> time its block rule expires
     while True:
         new_files = set(glob.glob(os.path.join(CSVFILEPATH, CSV_PATTERN))) - processed
         if not new_files:
@@ -75,14 +85,22 @@ def initiateSpvs():
                     log.info("Ignored flow with NaN or infinite features: " + ip_src + " -> " + str(df.iloc[i,3]))
                     continue
                 if predictions[df.index[i]] == PredictLabels.ANOMALY.value:
-                    DB.DBconfig_update_status(ip_src,increase=30)
+                    now = time.time()
+                    decay = int((now - last_anomaly.get(ip_src, now)) / 60 * SCORE_DECAY_PER_MINUTE)
+                    if decay > 0:
+                        DB.DBconfig_decrease_status(ip_src, decay)
+                    last_anomaly[ip_src] = now
+                    DB.DBconfig_update_status(ip_src, increase=ANOMALY_SCORE)
                     dp, stt = DB.DBconfig_query(ip_src)
                     log.warning("ANOMALY DETECTED FROM: " + ip_src + " attached with Switch ID: " + str(dp))
                     log.warning('Emergency level: ' + str(stt))
-                    if stt >= 100:
+                    if stt >= BLOCK_THRESHOLD and now < blocked_until.get(ip_src, 0):
+                        log.info("Source " + ip_src + " is already blocked")
+                    elif stt >= BLOCK_THRESHOLD:
                         try:
-                            OF.block_entry(dp, ip_src)
-                            log.info("Source " + ip_src + " has been blocked for 30 minutes, entry priority: 11111" ) 
+                            OF.block_entry(dp, ip_src, time=BLOCK_SECONDS)
+                            blocked_until[ip_src] = now + BLOCK_SECONDS
+                            log.info("Source %s has been blocked for %d minutes, entry priority: 11111", ip_src, BLOCK_SECONDS // 60)
                         except Exception as ex:
                             log.error('Error occurred when adding flow entry', exc_info=True)
                 else:
