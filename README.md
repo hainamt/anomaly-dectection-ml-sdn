@@ -63,7 +63,7 @@ Alternatively, `Topology/Script PCAP to CSV/TsharkCIC.py` captures with pyshark 
 1. The pcap files will be saved with the format "Flow_{index}_{year}{month}{date}{hour}{minute}{second}.pcap"
 2. The inotify tool in CICTrigger.sh will detect those PCAP files and automatically call the CICFlowMeter tool to convert those files into CSV Files with predefined features
 3. The shared folder is used to send those CSV files directly to a repository in the Controller's server
-4. Those csv files will be recognized and read by StartSupervisor.py through their index, they will be converted one last time to Dataframe and go through a trained ML model, sending out the prediction's result
+4. StartSupervisor.py picks up every new CSV file in Captures/CSV, oldest first, they will be converted one last time to Dataframe and go through a trained ML model, sending out the prediction's result
 5. If a source IP address is determined to be anomalous, the application will response with some actions in ManipAPI.Reaction. In this python file, 2 actions can be performed to indirectly modify flow entry of OpenFlow Switch by REST API (depending on the application running with the Controller):
  - Interact with rest_firewall
  - Interact with ofctl_rest
