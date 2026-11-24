@@ -21,7 +21,7 @@ CSV_PATTERN = 'Flow_*.pcap_Flow.csv'
 POLL_SECONDS = 1
 
 # Reaction to anomalies: each anomalous flow adds ANOMALY_SCORE to the source's status,
-# which decays by SCORE_DECAY_PER_MINUTE while no anomalies arrive. At BLOCK_THRESHOLD the
+# which decays by SCORE_DECAY_PER_MINUTE (applied whenever a flow from that source is processed). At BLOCK_THRESHOLD the
 # source is blocked on its switch for BLOCK_SECONDS.
 ANOMALY_SCORE = 30
 SCORE_DECAY_PER_MINUTE = 10
@@ -61,7 +61,7 @@ def initiateSpvs():
     idsapp = MLInitiater(MODEL_FILEPATH, DATA_PIPELINE_FILEPATH)
 
     processed = set()
-    last_anomaly = {}   # ip -> time of its last anomaly, for the score decay
+    decayed_until = {}  # ip -> time up to which its score decay has been applied
     blocked_until = {}  # ip -> time its block rule expires
     while True:
         new_files = set(glob.glob(os.path.join(CSVFILEPATH, CSV_PATTERN))) - processed
@@ -84,12 +84,15 @@ def initiateSpvs():
                 if df.index[i] not in predictions.index:
                     log.info("Ignored flow with NaN or infinite features: " + ip_src + " -> " + str(df.iloc[i,3]))
                     continue
+                # Apply the decay on every flow, so the stored score goes down over time
+                # and not only when the next anomaly arrives
+                now = time.time()
+                since = decayed_until.setdefault(ip_src, now)
+                decay = int((now - since) / 60 * SCORE_DECAY_PER_MINUTE)
+                if decay > 0:
+                    DB.DBconfig_decrease_status(ip_src, decay)
+                    decayed_until[ip_src] = since + decay * 60 / SCORE_DECAY_PER_MINUTE
                 if predictions[df.index[i]] == PredictLabels.ANOMALY.value:
-                    now = time.time()
-                    decay = int((now - last_anomaly.get(ip_src, now)) / 60 * SCORE_DECAY_PER_MINUTE)
-                    if decay > 0:
-                        DB.DBconfig_decrease_status(ip_src, decay)
-                    last_anomaly[ip_src] = now
                     DB.DBconfig_update_status(ip_src, increase=ANOMALY_SCORE)
                     dp, stt = DB.DBconfig_query(ip_src)
                     log.warning("ANOMALY DETECTED FROM: " + ip_src + " attached with Switch ID: " + str(dp))
