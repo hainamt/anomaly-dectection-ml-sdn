@@ -1,6 +1,14 @@
 #!/bin/bash
-inotifywait -m -r -q -e create --format %w%f /home/natrie/Topology/OutputPCAP | while read FILE
+# Convierte cada captura PCAP terminada en un CSV de flujos con CICFlowMeter
+BASE="$(cd "$(dirname "$0")/../.." && pwd)"
+PCAP_DIR="$BASE/Captures/PCAP"
+CSV_DIR="$BASE/Captures/CSV"
+CFM_HOME="$BASE/Topology/CICFlowMeter-4.0"
+export CFM_OPTS="-Djava.library.path=$CFM_HOME/lib/native"
+
+mkdir -p "$PCAP_DIR" "$CSV_DIR"
+inotifywait -m -q -e close_write --format '%w%f' "$PCAP_DIR" | while read -r FILE
 do
-  ./CICFlowMeter-4.0/bin/cfm $FILE /home/natrie/Topology/OutputCSV
-  echo "$FILE has been converted to CSV by CICFlowmeter"  
+  "$CFM_HOME/bin/cfm" "$FILE" "$CSV_DIR/"
+  echo "$FILE convertido a CSV por CICFlowMeter"
 done
