@@ -10,26 +10,53 @@
 - CICFlowMeter-Feature Extractor from PCAP files and export CSV files: https://github.com/ahlashkari/CICFlowMeter
 
 ## Environment setting
-- Set up Shared Folder (VM VirtualBox) between Mininet Server and Controller's server
-- Run Controller application from Ryu Controller: 
+The steps below were tested on a single Ubuntu 24.04 machine, with Mininet, Ryu, MongoDB and the Supervisor all on one host. The original setup used two VirtualBox VMs (a Mininet server and a controller server) with a shared folder for the CSV files. That still works if you point the controller IP and the CSV folder at the other VM.
+
+### 1. System packages
 ```
-ryu-manager --observe-links --verbose Topo_to_Mongo.py ofctl_rest.py
+sudo add-apt-repository ppa:deadsnakes/ppa      # Python 3.9 is not in the Ubuntu 24.04 repos
+sudo apt install python3.9 python3.9-venv mininet openvswitch-switch \
+                 tshark inotify-tools libpcap-dev openjdk-21-jre
 ```
-- In the mininet server, use Topology/SplTp.py to build the topology and connect to the Ryu Controller:
+Install MongoDB Community from https://www.mongodb.com/docs/manual/administration/install-on-linux/ and start it (`sudo systemctl start mongod`). Optional, for generating traffic: `sudo apt install iperf hping3`.
+
+### 2. Python environment
+The trained models (`Models/*.pkl`) and the data pipeline were saved with scikit-learn 0.24.2, which only supports Python 3.6–3.9, so use a Python 3.9 virtualenv with the pinned versions:
 ```
-sudo mn --custom SplTp.py --topo Simple_Topo --controller=remote,ip={ip address of the controller's server}
+python3.9 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
 ```
-- Run the ML Engine from Supervisor: 
+Keep `eventlet==0.30.2`: Ryu 4.34 imports `eventlet.wsgi.ALREADY_HANDLED`, which was removed in eventlet 0.30.3.
+
+### 3. Run
+Each command in its own terminal, from the repository root, with the venv activated where Python is used. Runtime files go to `Captures/PCAP` and `Captures/CSV`.
+
+1. Controller (Ryu + topology to MongoDB + REST API on port 8080):
 ```
-python StartSupervisor.py
+cd Controller && ryu-manager --observe-links --verbose Topo_to_Mongo.py ofctl_rest.py
 ```
-- In the mininet server, run:
- - Topology/CICTrigger/CICTrigger.sh - a script with inotify tool for dectecting new PCAP files:
+2. Topology (3 switches, 6 hosts `10.0.0.11`–`10.0.0.16`):
 ```
-sudo ./CICTrigger.sh
+cd Topology && sudo mn --custom SplTp.py --topo Simple_Topo --controller=remote,ip=127.0.0.1
 ```
- - Or Topology/Script PCAP to CSV/TsharkCIC.py - for the same purpose
-- If using the first option, in the mininet server, run Wireshark to capture the interfaces that need to be monitored, In the mininet server, set Wireshark to run continuously at arbitrary intervals and save with "Flow.pcap".
+3. PCAP to CSV converter:
+```
+./Topology/CICTrigger/CICTrigger.sh
+```
+4. Capture the host-facing switch ports in 30 s ring-buffer files (tshark names them `Flow_{index}_{timestamp}.pcap`):
+```
+sudo tshark -i s01-eth1 -i s01-eth2 -i s02-eth1 -i s02-eth2 -i s03-eth1 -i s03-eth2 \
+            -b duration:30 -w Captures/PCAP/Flow.pcap
+```
+5. ML engine:
+```
+cd Supervisor && python StartSupervisor.py
+```
+
+Alternatively, `Topology/Script PCAP to CSV/TsharkCIC.py` captures with pyshark and calls CICFlowMeter itself, replacing steps 3 and 4.
+
+**Known limitation:** a packet between hosts is captured twice, once at the sender's port and once at the receiver's. CICFlowMeter then produces inconsistent flows for long TCP transfers (split flows, negative durations and inter-arrival times), which can be misclassified.
 
 ## How it works
 > ⚠️ **WARNING**: **This is a bad pipeline, it should be optimized with a message queuing system like Kafka**
