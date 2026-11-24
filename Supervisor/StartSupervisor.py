@@ -22,8 +22,11 @@ POLL_SECONDS = 1
 
 # Reaction to anomalies: each anomalous flow adds ANOMALY_SCORE to the source's status,
 # which decays by SCORE_DECAY_PER_MINUTE (applied whenever a flow from that source is processed). At BLOCK_THRESHOLD the
-# source is blocked on its switch for BLOCK_SECONDS.
+# source is blocked on its switch for BLOCK_SECONDS. The score is capped at MAX_SCORE, so a
+# source falls back below the threshold (MAX_SCORE - BLOCK_THRESHOLD) / SCORE_DECAY_PER_MINUTE
+# minutes after its last anomaly instead of days after a long attack.
 ANOMALY_SCORE = 30
+MAX_SCORE = 200
 SCORE_DECAY_PER_MINUTE = 10
 BLOCK_THRESHOLD = 100
 BLOCK_SECONDS = 1800
@@ -93,7 +96,7 @@ def initiateSpvs():
                     DB.DBconfig_decrease_status(ip_src, decay)
                     decayed_until[ip_src] = since + decay * 60 / SCORE_DECAY_PER_MINUTE
                 if predictions[df.index[i]] == PredictLabels.ANOMALY.value:
-                    DB.DBconfig_update_status(ip_src, increase=ANOMALY_SCORE)
+                    DB.DBconfig_update_status(ip_src, increase=ANOMALY_SCORE, max_status=MAX_SCORE)
                     dp, stt = DB.DBconfig_query(ip_src)
                     log.warning("ANOMALY DETECTED FROM: " + ip_src + " attached with Switch ID: " + str(dp))
                     log.warning('Emergency level: ' + str(stt))

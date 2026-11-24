@@ -107,8 +107,13 @@ class RESTDBconfig(object):
                 # A host that moved is listed only under its new switch
                 coll.update_many({'Datapath ID': {'$ne': datapathid}}, {'$pull': {'Hosts': {'IP': ip}}})
 
-    def DBconfig_update_status(self, ip_src, increase=5, collection_name=CollName):
-        self.db[collection_name].update_one({"Hosts.IP": ip_src}, {'$inc':{"Hosts.$.Status": increase}})
+    def DBconfig_update_status(self, ip_src, increase=5, max_status=None, collection_name=CollName):
+        """Raise a host's status by `increase`, capped at `max_status` if given."""
+        coll = self.db[collection_name]
+        coll.update_one({"Hosts.IP": ip_src}, {'$inc':{"Hosts.$.Status": increase}})
+        if max_status is not None:
+            coll.update_one({'Hosts': {'$elemMatch': {'IP': ip_src, 'Status': {'$gt': max_status}}}},
+                            {'$set': {'Hosts.$.Status': max_status}})
 
     def DBconfig_decrease_status(self, ip_src, decrease, collection_name=CollName):
         """Lower a host's status by `decrease`, without going below 0."""
