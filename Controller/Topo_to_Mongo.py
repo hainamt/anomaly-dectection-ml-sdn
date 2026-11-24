@@ -1,3 +1,8 @@
+import os
+import sys
+
+# Reaction.py lives in Supervisor/ManipAPI and is shared with the Supervisor
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'Supervisor', 'ManipAPI'))
 from Reaction import RESTDBconfig
 from datetime import datetime
 from ryu.app import simple_switch_13
